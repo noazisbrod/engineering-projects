@@ -1,0 +1,186 @@
+item.sv0000600013666700037220000000052014635555056011633 0ustar  itaia1micronclass fifo_item;
+	// 1. Transaction Definition
+	rand bit wr_req;
+	rand bit rd_req;
+	rand bit [WIDTH-1:0] wr_data;
+	bit [WIDTH-1:0] r_data;
+	bit full_o;
+	bit empty_o;
+	rand bit [2:0] delay;
+	constraint different {wr_req ^ rd_req;}
+	constraint delay_after_read {
+	rd_req -> delay >= '1; solve rd_req before delay; }
+endclass : fifo_item
+
+interface.sv0000600013666700037220000000032514635555056012640 0ustar  itaia1microninterface fifo_if(input logic clk, input logic rstn);
+// 2. Interface Definition
+logic wr_req;
+logic rd_req;
+logic [WIDTH-1:0] wr_data;
+logic [WIDTH-1:0] rd_data;
+logic full;
+logic empty;
+endinterface : fifo_if
+
+
+fifo_tb.sv0000600013666700037220000000700614635560706012311 0ustar  itaia1micronmodule fifo_testbench;
+
+// ---------------------- //
+//    Clock and reset     //
+//   Do not modify		  //
+// ---------------------- //
+
+	bit clk;
+	bit rstn;
+	
+	// This initial block initializes clk, rstn, and 'turns on' the FIFO by driving 1 to rstn after 2 cycles.
+	initial begin
+		clk = 1'b0;
+		rstn = 1'b0;
+		
+		@(posedge clk);
+		@(posedge clk);
+		rstn = 1'b1;
+	end
+	
+	// This always block generates our clk
+	always #5 clk = ~clk;
+	
+	// ---------------------- //
+	//    Instantiations 	  //
+	//  DO modify			  //
+	// ---------------------- //
+	
+	// Interface Instantiation (2.2)
+	fifo_if fifo_if(.clk(clk),.rstn(rstn));
+	
+	// Design Module Instantiation (2.3)
+	fifo u_fifo(
+			.clk(clk),
+			.rstn(rstn),
+			.wr_req(fifo_if.wr_req),
+			.rd_req(fifo_if.rd_req),
+			.w_data(fifo_if.wr_data),
+			.r_data(fifo_if.rd_data),
+			.full_o(fifo_if.full),
+			.empty_o(fifo_if.empty));
+
+	// ---------------------- //
+	//  Testbench components
+	// ---------------------- // 
+	
+	mailbox #(fifo_item) generator_to_driver_mailbox;
+	mailbox #(fifo_item) monitor_to_model_mailbox;
+	
+	// 3. Generator
+	task Generator();
+		fifo_item item;
+		repeat(250)begin
+			item = new();
+			item.randomize();
+			generator_to_driver_mailbox.put(item);
+		end
+	
+	endtask : Generator
+	
+	
+	// 4. Driver
+	task Driver;
+	fifo_item item;
+	forever begin
+		@(posedge clk);
+		generator_to_driver_mailbox.get(item);
+		repeat (item.delay) @(posedge clk);
+			fifo_if.wr_data <= item.wr_data;
+			fifo_if.wr_req <= item.wr_req;
+			fifo_if.rd_req <= item.rd_req;
+			@(posedge clk);
+			fifo_if.wr_req <= 1'b0;
+			fifo_if.rd_req <= 1'b0;
+			fifo_if.wr_data <= 32'bx;
+	end
+		
+	endtask : Driver
+	
+	// 5. Monitor
+	
+	task Monitor();
+		fifo_item item;
+		item = new();
+		forever begin
+			@(posedge clk);
+				item.wr_req = fifo_if.wr_req;
+				item.rd_req = fifo_if.rd_req;
+				item.wr_data = fifo_if.wr_data;
+				#1
+				item.full_o = fifo_if.full;
+				item.r_data = fifo_if.rd_data;
+				item.empty_o = fifo_if.empty;
+				monitor_to_model_mailbox.put(item);
+			end
+	
+	endtask : Monitor
+
+	// 6. Model 
+	task Model();
+		bit  [WIDTH-1:0] ourFifo[$:DEPTH];
+		fifo_item item;
+		bit  [WIDTH-1:0] expected_r_data;
+		forever begin
+			monitor_to_model_mailbox.get(item);
+			if (rstn == 0) begin
+				ourFifo.delete();
+				if (item.empty_o!=0)begin
+				end
+			end else begin
+				if ((item.wr_req ==1 ) & ( ourFifo.size() != DEPTH) )begin
+						ourFifo.push_back(item.wr_data);
+				end
+				if ((item.rd_req ==1) & (ourFifo.size() !=0)) begin
+					expected_r_data = ourFifo.pop_front();
+					if (item.r_data == expected_r_data) begin
+						$display ("Match data successful %x", item.r_data);
+					end
+					else
+						$error("Mismatch with read data at time:%0t, read data %x, expected read data %x",$time,item.r_data,expected_r_data);
+					end
+				end
+				if (((ourFifo.size()==0) & (item.empty_o !=1)) | ((ourFifo.size()!=0) & (item.empty_o ==1))) begin
+					$error("Mismatch with Empty signal at time:%0t",$time);
+				end
+				if (((ourFifo.size()==DEPTH) & (item.full_o !=1)) | ((ourFifo.size()!=DEPTH) & (item.full_o ==1)))begin
+					$error("Mismatch with Full signal at time:%0t",$time);
+				end
+			end	
+	endtask : Model
+	
+	// ---------------------- //
+	//    Simulation start    //
+	//    Do not modify       // 
+	// ---------------------- //
+	initial begin
+		
+		// Testbench component instantiation
+		generator_to_driver_mailbox = new();
+		monitor_to_model_mailbox    = new();
+		
+		@(rstn == '1);
+		@(posedge clk);
+		
+		fork
+			Generator();
+			Driver();
+			Monitor();
+			Model();
+		join
+		
+	end
+	
+	initial begin
+		#10000;
+		$finish();
+		
+	end
+
+endmodule
+
